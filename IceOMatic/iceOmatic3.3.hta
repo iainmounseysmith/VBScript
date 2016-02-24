@@ -149,7 +149,7 @@ Set objtemp = CreateObject("Scripting.FileSystemObject")
 If objtemp.FileExists(strLDIFLocation & strLDIFTemplate) = False Then
  	Set objTemplate = objtemp.CreateTextFile(strLDIFLocation & strLDIFTemplate,False)
 	objTemplate.WriteLine "version: 1"
-	objTemplate.WriteLine "dn: cn=PCNAME,ou=WKSTN,ou=SITE,ou=REGION,o=COURTS"
+	objTemplate.WriteLine "dn: cn=PCNAME,ou=WKSTN,ou=SITE,ou=REGION,o=redacted"
 	objTemplate.WriteLine "changetype: add"
 	objTemplate.WriteLine "wMNAMEComputer: PCNAME"
 	objTemplate.WriteLine "zenwmMACAddress: 00:00:00:00:00:00"
@@ -158,8 +158,8 @@ If objtemp.FileExists(strLDIFLocation & strLDIFTemplate) = False Then
 	objTemplate.WriteLine "objectClass: device"
 	objTemplate.WriteLine "objectClass: top"
 	objTemplate.WriteLine "cn: PCNAME"
-	objTemplate.WriteLine "ACL: 1#subtree#cn=PCNAME,ou=WKSTN,ou=SITE,ou=REGION,o=COURTS#[Entry Rights]"
-	objTemplate.WriteLine "ACL: 15#subtree#cn=PCNAME,ou=WKSTN,ou=SITE,ou=REGION,o=COURTS#[All Attributes Rights]"
+	objTemplate.WriteLine "ACL: 1#subtree#cn=PCNAME,ou=WKSTN,ou=SITE,ou=REGION,o=redacted#[Entry Rights]"
+	objTemplate.WriteLine "ACL: 15#subtree#cn=PCNAME,ou=WKSTN,ou=SITE,ou=REGION,o=redacted#[All Attributes Rights]"
 	objTemplate.WriteLine "ACL: 3#entry#[Public]#wMNetworkAddress"
 	objTemplate.WriteLine "ACL: 3#entry#[Public]#zenwmMACAddress"
 	objTemplate.WriteLine "ACL: 3#entry#[Public]#zenwmSubnetMask"
