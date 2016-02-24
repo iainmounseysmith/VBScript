@@ -1,0 +1,1151 @@
+<html>
+<head>
+<title>IceO'Matic version 3.3</title> 
+<HTA:APPLICATION 
+     APPLICATIONNAME="IceOmatic" ID="oHTA"
+     SCROLL="yes"
+     SINGLEINSTANCE="yes"
+     WINDOWSTATE="normal"
+     VERSION="3.3"
+>
+<style>
+BODY
+{
+   background-color: buttonface;
+   font-family: Helvetica;
+   font-size: 8pt;
+   margin-top: 2px;
+   margin-left: 8px;
+   margin-right: 3px;
+   margin-bottom: 3px;
+   }
+   
+   .buttonsmall
+{
+   font-family: Helvetica;
+   font-size: 8pt;
+   width: 80px;
+}
+	
+</style>
+</head>
+
+<script language="VBScript.Encode">
+option explicit
+'================================================================================================================
+'
+' VBScript Source File -- Created with SAPIEN Technologies PrimalScript 3.1
+'
+' NAME: iceomatic_v3.3hta
+'
+' AUTHOR: Iain Mounsey-Smith,Ministry of Justice
+' DATE  : 29/01/2008
+' Version 3.3
+' COMMENT: This hta facilitates creating a custom ldif file and using ice.exe to create a workstation object
+' Dependencies: this hta is best run with local admin rights,however for use in a Zen app object select "run normal" (this to ensure WMI queries work)
+' Dependencies: the host app object runs a dist script to open up c:\ndps (c:\winnt\system32\cacls c:\ndps /g "users":f /e )
+' Dependencies: ConsoleOne must be installed with ice.exe and the other ice LDAP files;
+' Limitations of this script: d530 machines will not autofill the MAC address field;NT4 machines not supported;_ 
+' Limitations of this script:  MAC address machine will not autofill on any machine that has a non-standard password;intermittently the wmi queries fail_ 
+' Limitations of this script:  for whatever reason....manually add the mac address;WMI MAC address queries don't work when run in system context _ 
+' Limitations of this script:  via an application object
+' Versioning:
+' Fixed/new in v 2.2.2:encoded clear text passwords;changed all pointers from "h:\" to "c:\ndps" - all files now created_ 
+' locally
+' Fixed/new in v2.2.3:Modify blnicesuccess logic,subcreatetextfile now overwrites existing files;usernaem pointer file is_ 
+' always referenced for the users name, ensuring that name parsed to ice.exe is always correct;add sub _ 
+' subUpdateWSOcontextInLDIF in order to deal with subsequent modifications to the wso context
+' ice string now includes -o and -l switches to overwrite ice.log logfile created in c:\ndps\iceomatic
+' Fixed/new in v3.1
+' Fixed/new in v3.0":fix the problem wher the full users name and context is parsed to ice,exe when the user chnages the _ 
+' users name as a result of onchnage in users name text box
+' Enhancements required: handle user not entering a password;
+' deal with strcomputercaseless.value when it gets changed in error;add innerhtml functionality;ensure that if you_ 
+' change the wso context that the corresponding text in the ldif file is changed "onchange"
+' Fixed/new in v3.2 -adds workstation to w-all workstation laptop or desktop groups , also addds support for 
+' 	judicial laptops, judicial desktops and CF SOE machines, chnaged reg key to read for workstation context;chnaged app object to run in users context in order to be able to run wmi query
+' Fixed/new in v3.3:adds maxscriptstatements reg key so that script does not go unresponsive
+' enhancements required: need a button for adding membership of no wsus group, need to change location to somewhere that users can WRITE to e.g. local settings\temp, NOT c:\ndps
+' Exit codes: None identified. All log files can be accessed by on screen buttons
+' Outputs: 	eDirectory workstation object;logfile in c:\ndps\iceomatic;LDIF file in c:\ndps\iceomatic
+' remove dims, strpassword,yourtext,strNetworkAddress,blnvalidatepcname,strIceExeLocation,strContext
+' moved from subcreatewso to subdetectmacaddress
+'================================================================================================================
+Dim strSavedUserNamePointerFileLocation,strSavedUserNamePointerFileName
+Dim strComputer,stryourname,strOutputJustTheUsersName,strWMIpasswordSOE,strLDIFTemplate,objFSOIceLog,strIcePathAndExe
+Dim strWMIuserSOE,strWMIuser5x,strWMIpassword5x,strLDIFLocation,strLDIFLogLocation,objFSO,objFolder,objtemp,objfso1
+Dim objshell,objWshScriptExec,objstdout,stroutput,oreg,objfile,objTemplate,youraddition,logfilename
+Dim strContextKeyPath,strContextKey,strcomputerlocal,strMysite,strMyregion,strtext,strnewtext,MyArray,objLogFile,strContextUsera
+Dim strIceError,StrProcesedLine,strLine,blnIceSuccess,IntOutputLen,IntOutputLenMinusNwusername,Intnewusernamelength
+Dim strOutputJustTheUsersNameMinusrubbish,strContextWSO,strContextUser,stryournameCNonly,strUsersSite,strUsersRegion
+Dim strlan,strtext2,objSWbemLocatorSOE,objWMIService,objItem,colitems,objldiffile,strContent,strnewformat,strContents
+Dim objFolderItem,objshellexec,stricepathonly,objlog2,Q2,sRet,IE,objFileLog,objFSOIceLog2,objSWbemLocator5x,objWMIService5x
+Dim strDefMacAddress,strReadLineInTextFileLocation,strReadLineInTextFileFileName,strTheLineIntextfile,stryournameCNonly4Ice
+dim strTheValueiWantBack,StrAllWorkStations,strLDIFTemplateGroups,objtemp1,strdelay,strresume,strKeyPath,strDWORDValueName
+Dim strValueName,dwValue,strLDIFextension
+Const ForReading = 1
+Const ForWriting = 2
+Const ForAppending = 8
+Const HKEY_LOCAL_MACHINE = &H80000002
+Const HKEY_CURRENT_USER = &H80000001
+Sub Window_onLoad
+window.resizeTo 620,670
+
+strWMIuserSOE="soebuild"
+strWMIuser5x="administrator"
+strLDIFLocation = "c:\ndps\iceomatic\"
+strLDIFTemplate = "template.txt"
+strLDIFTemplateGroups = "templategroups.txt"
+strOutputJustTheUsersName=Null
+'C:\apps\consoleonezfd7\1.2\bin
+'strIceExeLocation="C:\program files\novell\consoleone\1.2\bin\" 'this is where the user should be getting ice.exe from 
+strIcePathAndExe="c:\apps\consoleonezfd7\1.2\bin\ice.exe" 'this is the default location
+strLDIFLogLocation = "c:\ndps\iceomatic\"
+'strLDIFLogLocation="C:\Documents and Settings\" & strOutputJustTheUsersNameMinusrubbish & "\Local Settings\Temp\iceomatic"
+strcomputerlocal="."
+strDefMacAddress="00:00:00:00:00:00" ' this value set to make it easy to parse this param to InputstrMacAddress onchange event
+StrAllWorkStations="W-ALL-WORKSTATIONS"
+strLDIFextension=".ldif"
+
+Set objFSOIceLog = CreateObject("Scripting.FileSystemObject")
+
+strComputerCaselessInput.focus 'dont believe erquired anymoer
+
+'creates the logfile location if not already exist
+
+Set objFSO = CreateObject("Scripting.FileSystemObject")
+If objFSO.FolderExists("c:\ndps\iceomatic\") Then
+   	Set objFolder = objFSO.GetFolder("c:\ndps\iceomatic\")
+Else
+    'Set objFSO = CreateObject("Scripting.FileSystemObject")
+    objFSO.CreateFolder("c:\ndps\iceomatic\")
+End If
+
+'Create temporary LocalLog (dummy.log)
+If objFSOIceLog.FileExists(strLDIFLogLocation & "dummy.Log") = False Then
+	Set objFile = objFSOIceLog.CreateTextFile(strLDIFLogLocation & "dummy.Log",true)
+	objFile.WriteLine "Log of workstation object creation for dummy on " & Now 
+	objFile.writeblanklines(1)
+	objFile.close
+Else
+	'Set objFile = objFSOIceLog.OpenTextFile(strLDIFLogLocation & "dummy.Log",8)
+	'objFile.close
+End If
+SubAddStylesDword
+' add reg key and value...this is so that you don't get an error about the script being non-responsive
+' Sub SubAddStylesDword
+' 	Set oreg=GetObject("winmgmts:{impersonationLevel=impersonate}!\\" & _ 
+'     strcomputerlocal & "\root\default:StdRegProv")
+' 	strKeyPath = "SOFTWARE\Microsoft\Internet Explorer\Styles"
+' 	strValueName = "MaxScriptStatements"
+' 	dwValue = 70000000
+' 	oReg.CreateKey HKEY_CURRENT_USER,strKeyPath
+' 	oReg.SetDWORDValue HKEY_CURRENT_USER,strKeyPath,strValueName,dwValue
+' 	addtolog "MaxScriptStatements reg key added","dummy" ' should really do some sort of checking that this is sucessful
+' End Sub
+
+'create template ldif file for creating the wso
+Set objtemp = CreateObject("Scripting.FileSystemObject")
+If objtemp.FileExists(strLDIFLocation & strLDIFTemplate) = False Then
+ 	Set objTemplate = objtemp.CreateTextFile(strLDIFLocation & strLDIFTemplate,False)
+	objTemplate.WriteLine "version: 1"
+	objTemplate.WriteLine "dn: cn=PCNAME,ou=WKSTN,ou=SITE,ou=REGION,o=COURTS"
+	objTemplate.WriteLine "changetype: add"
+	objTemplate.WriteLine "wMNAMEComputer: PCNAME"
+	objTemplate.WriteLine "zenwmMACAddress: 00:00:00:00:00:00"
+	objTemplate.WriteLine "objectClass: Workstation"
+	objTemplate.WriteLine "objectClass: computer"
+	objTemplate.WriteLine "objectClass: device"
+	objTemplate.WriteLine "objectClass: top"
+	objTemplate.WriteLine "cn: PCNAME"
+	objTemplate.WriteLine "ACL: 1#subtree#cn=PCNAME,ou=WKSTN,ou=SITE,ou=REGION,o=COURTS#[Entry Rights]"
+	objTemplate.WriteLine "ACL: 15#subtree#cn=PCNAME,ou=WKSTN,ou=SITE,ou=REGION,o=COURTS#[All Attributes Rights]"
+	objTemplate.WriteLine "ACL: 3#entry#[Public]#wMNetworkAddress"
+	objTemplate.WriteLine "ACL: 3#entry#[Public]#zenwmMACAddress"
+	objTemplate.WriteLine "ACL: 3#entry#[Public]#zenwmSubnetMask"
+	objTemplate.close
+	'Else
+End If
+
+'create template ldif file for adding workstation group memberships
+' Set objtemp = CreateObject("Scripting.FileSystemObject")
+' If objtemp.FileExists(strLDIFLocation & strLDIFTemplateGroups) = False Then
+'  	Set objTemplate = objtemp.CreateTextFile(strLDIFLocation & strLDIFTemplateGroups,False)
+' 	objTemplate.WriteLine "version: 1"
+' 	objTemplate.close
+' 	'Else
+' End If
+
+'log creation of template
+If objTemp.FileExists(strLDIFLocation & strLDIFTemplate) = True Then  
+	addtolog "TemplateLDIF created In " & strLDIFLocation , "dummy"
+End If
+
+'checks to see if ice files are installed
+Set objFSO1 = CreateObject("Scripting.FileSystemObject")
+If objFSO1.FileExists(strIcePathAndExe)= true Then
+	addtolog "Ice.exe found at the default location of " & strIcePathAndExe, "dummy"
+	BrowseForIce.disabled=True
+	ViewIceLog.disabled=False
+	
+Else ' maybe there is a location.txt pointer ??
+	addtolog "Ice.exe NOT found at the default location of " & strIcePathAndExe, "dummy"
+	If objFSO1.FileExists(strLDIFLogLocation & "location.txt")= true Then
+			BrowseForIce.disabled=True
+			ViewIceLog.disabled=false
+			Set objLogFile = objFSO1.OpenTextFile(strLDIFLogLocation & "location.txt",1)
+			strIcePathAndExe=objLogFile.readline
+			objLogFile.close
+			addtolog "Detected location of ice.exe via contents of c:\ndps\location.txt, the location is " & strIcePathAndExe,"dummy"
+	Else ' no there isn't, so prompt user to browse for ice.exe
+			addtolog strLDIFLogLocation & "Location.txt cannot be found,therefore I don't know where to find Ice.exe," & " the user will be prompted to click on the " & chr(34) & "Browse for ice" & chr(34) & " button","dummy"
+			BrowseForIce.disabled=False
+			ViewIceLog.disabled=True
+			MsgBox "I'm not sure where your ice.exe file is...please click the " & chr(34) & "Browse to find ice.exe" & chr(34) & " button and find it " & _
+			vbcrlf & "If you can't find ice.exe then contact the vendor in order to get this resolved",64,"Find Ice"
+'addtolog "I can't find your copy of ice.exe and its support files", "dummy"
+	End If
+End If
+
+'functionality for saving the last known user name
+strSavedUserNamePointerFileLocation="c:\ndps\iceomatic\"
+strSavedUserNamePointerFileName="savedusername.txt"
+Set objFSO1 = CreateObject("Scripting.FileSystemObject") ' look for savedusername pointer file and read it to get last known username
+If objFSO1.FileExists(strSavedUserNamePointerFileLocation & strSavedUserNamePointerFileName)= true Then
+	addtolog "A saved username file found", "dummy"
+	Set objLogFile = objFSO1.OpenTextFile(strSavedUserNamePointerFileLocation & strSavedUserNamePointerFileName,1)
+	strEnterUsersName.value=ucase(objLogFile.readline)
+'	strEnterUsersName.value=ucase(objLogFile.readline) pre 3.2
+	addtolog "the username found is " & strEnterUsersName.value,"dummy"
+	objLogFile.close
+	addtolog "Detected saved username via contents of " & strSavedUserNamePointerFileLocation & strSavedUserNamePointerFilename ,"dummy"
+	GetstrContextWSO ' work out your local context, and therefore your machines local context, they may not be the same but who cares?
+	strComputerCaselessInput.value=strcomputerlocal
+	wsocontext.value=strContextWSO
+Else ' the savedusername pointer file does not exist, so detect username and create savedusername pointer file
+	addtolog "A saved username pointer file NOT found ", "dummy"
+	Set objShell = CreateObject("WScript.Shell")
+	Set objWshScriptExec = objShell.Exec("%COMSPEC% /c set nwusername")'gets valus of nwusername variable
+	Set objStdOut = objWshScriptExec.StdOut ' assigns the standard ouptut of the command to an object
+	strOutput = objStdOut.ReadAll ' reads every line of the standard output
+	addtolog "STROUTPUT is " & stroutput,"dummy"
+	IntOutputLen=Len(strOutput)'determine the length of the returned String
+	IntOutputLenMinusNwusername=IntOutputLen - 11 'subtract 11(NWUSERNAME=)...this is how many characters on the right_ 
+	' to take
+	strOutputJustTheUsersName = right(strOutput,IntOutputLenMinusNwusername) ' this gives us the rightmost characters ie_ 
+	' minus the "nwusername=" part
+	'however we still need to remove 2 extraneous characters on the right handside- not sure where they come from
+	Intnewusernamelength=Len(strOutputJustTheUsersName)-2
+	'WScript.Echo "stusernamelength" & stusernamelength
+	strOutputJustTheUsersNameMinusrubbish=Left(strOutputJustTheUsersName,Intnewusernamelength)
+	addtolog strOutputJustTheUsersNameMinusrubbish & " is the initially detected username (detectedstrOutputJustTheUsersNameMinusrubbish)" ,"dummy"
+	'wmi query for users context (strContextUser) , make wso context strContextWSO="WKSTN." & strContextWSO
+	GetstrContextWSO ' work out your local context, and therefore your machines local context, they may not be the same but who cares?
+	'set default text box values
+	strComputerCaselessInput.value=strcomputerlocal  'not sure why I did this
+	wsocontext.value=strContextWSO ' populate context box
+	strEnterUsersName.value=strOutputJustTheUsersNameMinusrubbish & "." & strContextUser 'populate username plus users context from the registry
+	subcreatetextfile strSavedUserNamePointerFileLocation,strSavedUserNamePointerFileName,strEnterUsersName.value
+	'from main body end
+	'strLDIFLogLocation="C:\Documents and Settings\" & strOutputJustTheUsersNameMinusrubbish & "\Local Settings\Temp\iceomatic"
+
+	'addtolog "newlocation " & strLDIFLogLocation
+End If
+End Sub
+
+Sub GetstrContextWSO
+	addtolog "strlocal computer is " & strcomputerlocal,"dummy"
+	strcomputerlocal="."
+	Set oreg=GetObject("winmgmts:{impersonationLevel=impersonate}!\\" & strcomputerlocal & "\root\default:StdRegProv")
+	'Set oreg=GetObject("winmgmts:{impersonationLevel=impersonate}!\\.\root\default:StdRegProv")
+	strContextKeyPath = "SOFTWARE\Novell\workstation manager\search policy"
+	strContextKey = "associated dn"
+	oReg.GetStringValue HKEY_LOCAL_MACHINE,strContextKeyPath,strContextKey,strContextUser
+	'DisplayErrorInfo
+	'Set objShell = WScript.CreateObject("WScript.Shell")
+	'strContextUser = objShell.RegRead ("HKLM\Software\Novell\workstation manager\search policy\associated dn")
+'Wscript.Echo iWordWrap
+	addtolog "Your eDirectory context has been determined to be " & strContextUser, "dummy"
+	strContextWSO="WKSTN." & strContextUser ' autofile the wkstn container bit
+	addtolog  "A default container for your workstation object is set as WKSTN." & strContextUser,"dummy" 
+End Sub
+	'this sub is for creating a text file corresponding to the parameters parsed to it
+Sub subcreatetextfile (strtextfilelocation,strtextfilename,strtextfileline)
+Dim objname,objLogFilename
+	Set objname = CreateObject("Scripting.FileSystemObject")
+	Set objLogFilename = objname.CreateTextFile(strtextfilelocation & strtextfilename,true) ' true means file can be ovewrwritten
+	objLogFilename.WriteLine strtextfileline
+	objLogFilename.close
+	addtolog "Text file created: " & strtextfilelocation &  strtextfilename & " with contents " & strtextfileline,"dummy" 
+End Sub
+
+'************************************************************************************************************************
+Sub Window_OnUnLoad
+strLDIFLocation = "c:\ndps\iceomatic\"
+strLDIFTemplate = "template.txt"
+strLDIFLogLocation = "c:\ndps\iceomatic\"
+	'delete ldif template, dummy Log
+	Set objFSO = CreateObject("Scripting.FileSystemObject")
+	If objFSO.FileExists(strLDIFLocation & strLDIFTemplate) = True Then ' make sure 
+		 objFSO.DeleteFile(strLDIFLocation & strLDIFTemplate)
+		 addtolog "Template LDIF deleted", strComputerCaselessInput.value  'we don't want the template to survive
+	End If
+	If objFSO.FileExists(strLDIFLogLocation & "dummy.log") = True Then ' we don't want to the dummy log to survive
+		 objFSO.DeleteFile(strLDIFLogLocation & "dummy.log")
+		 addtolog "Dummy log deleted", strComputerCaselessInput.value
+	End If
+	err.clear
+	addtolog "**********************",strComputerCaselessInput.value ' this to delineate creation attempts in the log file
+	addtolog "******END OF LOG******",strComputerCaselessInput.value
+	addtolog "**********************",strComputerCaselessInput.value
+	
+	' delete reg key and value when finished
+	SubDeleteStylesDword
+
+End Sub
+'************************************************************************************************************************
+
+sub SubDetectMacAddress
+addtolog "Entered SubDetectMacAddress onlosefocus event handler", "dummy"
+strlan="Local Area connection"
+strWMIuserSOE="soebuild"
+strWMIuser5x="administrator"
+strLDIFLocation = "c:\ndps\iceomatic\"
+strLDIFLogLocation="C:\ndps\iceomatic\"
+strLDIFTemplate = "template.txt"
+strcomputer="."
+Const ForReading = 1
+Const ForWriting = 2
+Const ForAppending = 8
+Const HKEY_LOCAL_MACHINE = &H80000002
+document.body.style.cursor = "wait"
+	'*
+	'change pcname as received by onchnage event into strcomputer
+	strComputer=UCase(strComputerCaselessInput.value)
+	'copy dummy.log to pcname variable, we keep the dummy file in case we enter a dfferent pcname
+	'On Error Resume next
+	'strpcname=strComputerCaselessInput.value
+	'strpcname=<"<span style=color="red" face="Times New Roman" size="3">
+	'DataAreaPCSelection.InnerHTML = "You have selected " & strComputer
+	'strContent=strComputerCaselessInput.value
+	'strnewformat = "<span style='background-color: #FFFF00'>text</span>"
+     '   strContent = Replace(strContent, strComputerCaselessInput.value, strNewText)
+      '  DataArea.InnerHTML = strContent
+
+	' copy dummy.log to %pcname%.log, ****** we're now logging to a unique logfile ********
+	Set objFSO = CreateObject("Scripting.FileSystemObject")
+	addtolog "about to determine of dummy log exists","dummy"
+	If objFSO.FileExists(strLDIFLogLocation & "dummy.Log") = true Then
+		addtolog "About to copy dummylog ", "dummy"
+		objFSO.copyFile strLDIFLogLocation & "dummy.log" , strLDIFLogLocation & strComputer & ".log"
+		'err.clear
+		addtolog "Dummy copied",strComputerCaselessInput.value
+	Else 
+	End If
+
+	strComputer=UCase(strComputer)
+	addtolog "strcomputer = " & strComputer,strComputer
+	addtolog "strComputerCaselessInput.value = " & strComputerCaselessInput.value,strComputer
+	'If UCase(left(strComputer,2)) = "LT" Or UCase(left(strComputer,2)) = "PC" Or UCase(left(strComputer,2)) = "HS" Or UCase(left(strComputer,2))="HS" and Len(strComputer)= 7 and isnumeric(Mid(strComputer,3,5))= True Then 
+	If UCase(left(strComputer,2)) = "LT" Or UCase(left(strComputer,2)) = "PC" Or UCase(left(strComputer,2)) = "HS" and Len(strComputer)= 7 and isnumeric(Mid(strComputer,3,5))= True Then 
+		 addtolog "The following valid pcname entered " & strComputer,strComputer
+		'addtolog "The workstations context is " & strContextWSO,strComputer
+	elseif UCase(left(strComputer,3))="MOJ" and Len(strComputer)= 9 and isnumeric(Mid(strComputer,4,9))= True Then
+		'the above line to cater for moj prefixed pcnames
+	Else
+		addtolog "Invalid pcname entered " & strComputerCaselessInput.value,strcomputer 
+		MsgBox "You've entered an invalid PC name...try again " 
+		strcomputer=""
+		strComputerCaselessInput.focus
+	End If
+
+
+	'Entering GetMAC WMI code for SOE machines
+	On Error Resume Next ' don't remove this as this query WILL fail (and produce an error) when querying a non-existent machine
+	addtolog "Entering SOE mac address query logic", strComputerCaselessInput.value
+	strWMIpasswordSOE="SOE997Master"
+	Set objSWbemLocatorSOE = CreateObject("WbemScripting.SWbemLocator")
+	Set objWMIService = objSWbemLocatorSOE.ConnectServer(strComputerCaselessInput.value, _ 
+    "root\CIMV2", _ 
+    "soebuild", _ 
+    strWMIpasswordSOE)
+    'displayerrorinfo
+	 addtolog "The Error reported when attempting to connect to the objwmiservice object is " & Err , strComputerCaselessInput.value
+	        Select Case Err
+	        Case 0
+			Set colItems = objWMIService.ExecQuery("Select * from Win32_NetworkAdapter where NetConnectionID='"_ 
+			& strlan & "'",,48)
+				For Each objItem in colItems ' there's only one item in the collection
+					InputstrMacAddress.value=objItem.MACAddress
+					addtolog "SOE MAC Address from WMI query: " & InputstrMacAddress.value, strComputerCaselessInput.value
+				Next
+	    	Case -2147024891
+	         		addtolog "The username or password used to connect to the WMI service on the SOE machine is incorrect", strComputer
+	          		Err.Clear
+	          		addtolog "Redirecting to getmac5x sub, the machine must be non SOE i.e. version 5.x", strComputerCaselessInput.value
+	          		
+	          		
+	          		Call getmac5x ' the target may be a non-soe one, so call getmac5x
+	          		
+	          		
+	        Case -2147023174
+	          		addtolog  "The SOE computer is not online, the target machine is not an SOE one, or you may have an invalid PCNAME",strComputer
+	          		Err.Clear
+	          		InputstrMacAddress.value="00:00:00:00:00:00"
+	          		addtolog  "Using default MAC address "& InputstrMacAddress.value,strComputerCaselessInput.value
+	        Case -2147024891 ' not entirely sure why this error occurs
+	         		addtolog " The seems to be a problem connecting to the WMI service - error is " & chr(34)& "access denied" & chr(34)
+	        		InputstrMacAddress.value="00:00:00:00:00:00"
+	        		addtolog  "Using default MAC address "& InputstrMacAddress.value,strComputerCaselessInput.value
+	        Case Else
+	        		addtolog "Unrecognised Error captured during attempt to connect to object objWMIService", strComputerCaselessInput.value
+	          		'captured this error (-2147217308) at one point in time, not sure what it denotes	     End Select
+	          		InputstrMacAddress.value="00:00:00:00:00:00"
+	          		addtolog  "Using default MAC address "& InputstrMacAddress.value,strComputerCaselessInput.value
+			End Select
+			
+	document.body.style.cursor = "default"
+
+	'replace MAC address and PCNAME placeholders in the ldif file with the correct values and save using computername
+	Set objFile = CreateObject("Scripting.FileSystemObject")
+	Set objLDIFFile = objFile.OpenTextFile(strLDIFLocation & strLDIFTemplate,1)
+    strText = objLDIFFile.ReadAll ' read in template ldif file
+    objLDIFFile.Close
+    strNewText = Replace(strText, "PCNAME", strComputer)
+    strtext2 = Replace (strnewtext,"00:00:00:00:00:00",InputstrMacAddress.value)
+	Set objLDIFFile = objFile.OpenTextFile(strLDIFLocation & strComputer & ".ldif",ForWriting,true)' write the new ldif file
+	objLDIFFile.WriteLine strText2 'replace defaults for pcname andmacaddress with detected values
+	objLDIFFile.Close
+	
+	If objFile.FileExists(strLDIFLocation & strComputer & ".ldif") = TRue Then 
+		'alert "blah"
+		addtolog "The LDIF file with custom pcname and mac address has been created in " & strLDIFLocation,strComputerCaselessInput.value
+	 	'else
+	End If
+	
+	'if the pcname has been chnaged then we need to ensure that the grous ldif file is also renamed
+'  	If objFile.FileExists(strLDIFLocation & strComputerCaselessInput.value & "groups.ldif") = False Then ' make sure 
+' ' 		 objFile.DeleteFile(strLDIFLocation & strLDIFTemplate)
+' 
+' 	Else
+' 		subrenamefile strLDIFLocation & strLDIFTemplateGroups,strLDIFLocation & strComputerCaselessInput.value & "groups.ldif" 
+' 	End If
+	
+	're-enable buttons
+    EvtCreateWSO.disabled=False
+    viewicelog.disabled=False
+	EvtViewLogfile.disabled=False
+	EvtViewLDIFgroupfile.disabled=False
+	
+	'determine preliminary mysite and region based on guestimate (based on users context), this may be chnaged later by user
+	MyArray = Split(ucase(wsocontext.value),".") ' wkstn 0 site 1 region 2 
+	strMysite=MyArray(1)
+	strMyregion=MyArray(2)
+	addtolog "MyArray wscontext element 0 is " & MyArray(0),strComputerCaselessInput.value
+	addtolog "MyArray wscontext element 1 (Mysite) " & MyArray(1), strComputerCaselessInput.value
+	addtolog "MyArray wscontext element 2 (MyRgion) " & MyArray(2), strComputerCaselessInput.value
+	 	 ' extracts context information for the authenticating user 
+	MyArray = Split(ucase(strEnterUsersName.value),".")
+	stryournameCNonly=MyArray(0)
+	strUsersSite=MyArray(1)
+	strUsersRegion=MyArray(2)
+	addtolog "Default from NWusername:MyArray stryournameCNonly element 0 is " & MyArray(0),strComputerCaselessInput.value
+	addtolog "Default from NWusername:MyArray strUsersSite element 1 (Mysite) " & MyArray(1), strComputerCaselessInput.value
+	addtolog "Default from NWusername:MyArray strUsersRegion element 2 (MyRgion) " & MyArray(2), strComputerCaselessInput.value
+	'addtolog "b4 SubUpdateworkstationType", strComputerCaselessInput.value
+'addtolog "workstationtype " &  ,strComputerCaselessInput.value
+SubUpdateworkstationType
+	'addtolog "after SubUpdateworkstationType", strComputerCaselessInput.value
+
+	'replace site and region placeholders in the ldif file
+	ReplaceTextinLDIF "SITE",strMysite,strLDIFLogLocation & strComputerCaselessInput.value & ".ldif"' populate sitename
+	ReplaceTextinLDIF "REGION",strMyregion,strLDIFLogLocation & strComputerCaselessInput.value & ".ldif" ' populate region name
+	ReplaceTextinLDIF "PCNAME",strComputerCaselessInput.value,strLDIFLogLocation & strComputerCaselessInput.value & ".ldif" 'populate pcname
+
+	addtolog "The correct context information has been placed into the ldif file", strComputerCaselessInput.value
+	EvtViewLDIFfile.disabled=False
+End Sub
+
+Sub SubUpdateworkstationType 'add site specific information to the ldif file
+
+addtolog "SubUpdateworkstationType subroutine entered", strComputerCaselessInput.value
+'create template ldif file for adding workstation group memberships
+	If objtemp.FileExists(strLDIFLocation & strComputerCaselessInput.value & "groups.ldif") = False Then
+	addtolog "The groups ldif file was not created" , strComputerCaselessInput.value
+	Set objtemp1 = CreateObject("Scripting.FileSystemObject")
+ 	Set objTemplate = objtemp1.CreateTextFile(strLDIFLocation & strComputerCaselessInput.value & "groups.ldif",False)
+	objTemplate.WriteLine "version: 1"
+	objTemplate.close
+	Else
+	SubRenewLDIFfile
+	addtolog "The groups ldif file was created" , strComputerCaselessInput.value
+	End If 
+
+	addtolog "value " & workstationtype(0).value,strComputerCaselessInput.value
+subsplitWSOcontext 'split wsiocotext.valuse into an aray o get correct new context information
+'addtolog "workstationtype detected is " & workstationtype.value, strComputerCaselessInput.value
+'addtolog "workstationtype detected is " & workstationtype, strComputerCaselessInput.value
+
+ If workstationtype(0).Checked Then
+		SubRenewLDIFfile ' set the ldif back to the standard first 15 lines i.e NOT site specific
+    	addtolog "value " & workstationtype(0).value,strComputerCaselessInput.value
+	    addtolog "Standard Desktop is selected", strComputerCaselessInput.value
+        addtoldif "# Standard Desktop"
+        addtoldif ""
+        addtoldif "dn: cn=W-ALL-WORKSTATIONS,ou=WKSTN,ou=SITE,ou=REGION,o=COURTS"
+        addtoldif "changetype: modify"
+        addtoldif "add: Member"
+        addtoldif "member: cn=PCNAME,ou=WKSTN,ou=SITE,ou=REGION,o=COURTS"
+        addtoldif ""
+        addtoldif "dn: cn=W-ALL-WORKSTATIONS,ou=WKSTN,ou=SITE,ou=REGION,o=COURTS"
+		addtoldif "changetype: modify"
+		addtoldif "add: equivalentToMe"
+		addtoldif "equivalentToMe: cn=PCNAME,ou=WKSTN,ou=SITE,ou=REGION,o=COURTS"
+		addtoldif ""
+		addtoldif "dn: cn=PCNAME,ou=WKSTN,ou=SITE,ou=REGION,o=COURTS"
+		addtoldif "changetype: modify"
+		addtoldif "add: groupMembership"
+		addtoldif "groupMembership: cn=W-ALL-WORKSTATIONS,ou=WKSTN,ou=SITE,ou=REGION,o=COURTS"
+		addtoldif ""
+		addtoldif "dn: cn=PCNAME,ou=WKSTN,ou=SITE,ou=REGION,o=COURTS"
+		addtoldif "changetype: modify"
+		addtoldif "add: equivalentToMe"
+		addtoldif "equivalentToMe: cn=W-ALL-WORKSTATIONS,ou=WKSTN,ou=SITE,ou=REGION,o=COURTS"
+		addtoldif "dn: cn=W-UTL-PAT-DISABLE-WSUS-XP-A,ou=ORT-GROUPS,ou=ORTCOMMON,ou=ORT,ou=CENTRAL,o=COURTS"
+        addtoldif "changetype: modify"
+        addtoldif "add: Member"
+        addtoldif "member: cn=PCNAME,ou=WKSTN,ou=SITE,ou=REGION,o=COURTS"
+        addtoldif ""
+        addtoldif "dn: cn=W-UTL-PAT-DISABLE-WSUS-XP-A,ou=ORT-GROUPS,ou=ORTCOMMON,ou=ORT,ou=CENTRAL,o=COURTS"
+		addtoldif "changetype: modify"
+		addtoldif "add: equivalentToMe"
+		addtoldif "equivalentToMe: cn=PCNAME,ou=WKSTN,ou=SITE,ou=REGION,o=COURTS"
+		addtoldif ""
+		addtoldif "dn: cn=PCNAME,ou=WKSTN,ou=SITE,ou=REGION,o=COURTS"
+		addtoldif "changetype: modify"
+		addtoldif "add: groupMembership"
+		addtoldif "groupMembership: cn=W-UTL-PAT-DISABLE-WSUS-XP-A,ou=ORT-GROUPS,ou=ORTCOMMON,ou=ORT,ou=CENTRAL,o=COURTS"
+		addtoldif ""
+		addtoldif "dn: cn=PCNAME,ou=WKSTN,ou=SITE,ou=REGION,o=COURTS"
+		addtoldif "changetype: modify"
+		addtoldif "add: equivalentToMe"
+		addtoldif "equivalentToMe: cn=W-UTL-PAT-DISABLE-WSUS-XP-A,ou=ORT-GROUPS,ou=ORTCOMMON,ou=ORT,ou=CENTRAL,o=COURTS"
+		ReplaceTextinLDIF "PCNAME",strComputerCaselessInput.value,strLDIFLogLocation & strComputerCaselessInput.value & "groups.ldif" 'replace the additional new pcname variables to the actual pcname
+		ReplaceTextinLDIF "SITE",strMysite,strLDIFLogLocation & strComputerCaselessInput.value & "groups.ldif" ' populate sitename
+ 		ReplaceTextinLDIF "REGION",strMyregion,strLDIFLogLocation & strComputerCaselessInput.value & "groups.ldif" ' populate region name
+		End If
+If workstationtype(1).Checked Then
+		SubRenewLDIFfile ' set the ldif back to the standard first 15 lines i.e NOT site specific
+	    addtolog "Standard Laptop is selected", strComputerCaselessInput.value
+        addtoldif "# Standard Laptop"
+        addtoldif ""
+        addtoldif "dn: cn=W-ALL-LAPTOPS,ou=PROD-GROUPS,ou=ORTCOMMON,ou=SITE,ou=REGION,o=COURTS"
+        addtoldif "changetype: modify"
+        addtoldif "add: Member"
+        addtoldif "member: cn=PCNAME,ou=WKSTN,ou=SITE,ou=REGION,o=COURTS"
+        addtoldif ""
+        addtoldif "dn: cn=W-ALL-LAPTOPS,ou=PROD-GROUPS,ou=ORTCOMMON,ou=SITE,ou=REGION,o=COURTS"
+		addtoldif "changetype: modify"
+		addtoldif "add: equivalentToMe"
+		addtoldif "equivalentToMe: cn=PCNAME,ou=WKSTN,ou=SITE,ou=REGION,o=COURTS"
+		addtoldif ""
+		addtoldif "dn: cn=PCNAME,ou=WKSTN,ou=SITE,ou=REGION,o=COURTS"
+		addtoldif "changetype: modify"
+		addtoldif "add: groupMembership"
+		addtoldif "groupMembership: cn=W-ALL-LAPTOPS,ou=PROD-GROUPS,ou=ORTCOMMON,ou=SITE,ou=REGION,o=COURTS"
+		addtoldif ""
+		addtoldif "dn: cn=PCNAME,ou=WKSTN,ou=SITE,ou=REGION,o=COURTS"
+		addtoldif "changetype: modify"
+		addtoldif "add: equivalentToMe"
+		addtoldif "equivalentToMe: cn=W-ALL-LAPTOPS,ou=PROD-GROUPS,ou=ORTCOMMON,ou=SITE,ou=REGION,o=COURTS"
+		ReplaceTextinLDIF "PCNAME",strComputerCaselessInput.value,strLDIFLogLocation & strComputerCaselessInput.value & "groups.ldif" 'replace the additional new pcname variables to the actual pcname
+		ReplaceTextinLDIF "SITE",strMysite,strLDIFLogLocation & strComputerCaselessInput.value & "groups.ldif" ' populate sitename
+ 		ReplaceTextinLDIF "REGION",strMyregion,strLDIFLogLocation & strComputerCaselessInput.value & "groups.ldif" ' populate region name
+		End If
+
+If workstationtype(2).Checked Then
+		SubRenewLDIFfile ' set the ldif back to the standard first 15 lines i.e NOT site specific
+        addtolog "Judicial Desktop is selected", strComputerCaselessInput.value
+        addtoldif "# Judicial Desktop"
+		addtoldif ""
+        addtoldif "dn: cn=W-ALL-DESKTOPS-JUDICIAL,ou=PROD-GROUPS,ou=ORTCOMMON,ou=ORT,ou=CENTRAL,o=COURTS"
+        addtoldif "changetype: modify"
+        addtoldif "add: Member"
+        addtoldif "member: cn=PCNAME,ou=WKSTN,ou=SITE,ou=REGION,o=COURTS"
+        addtoldif ""
+        addtoldif "dn: cn=W-ALL-DESKTOPS-JUDICIAL,ou=PROD-GROUPS,ou=ORTCOMMON,ou=ORT,ou=CENTRAL,o=COURTS"
+		addtoldif "changetype: modify"
+		addtoldif "add: equivalentToMe"
+		addtoldif "equivalentToMe: cn=PCNAME,ou=WKSTN,ou=SITE,ou=REGION,o=COURTS"
+		addtoldif ""
+		addtoldif "dn: cn=PCNAME,ou=WKSTN,ou=SITE,ou=REGION,o=COURTS"
+		addtoldif "changetype: modify"
+		addtoldif "add: groupMembership"
+		addtoldif "groupMembership: cn=W-ALL-DESKTOPS-JUDICIAL,ou=PROD-GROUPS,ou=ORTCOMMON,ou=ORT,ou=CENTRAL,o=COURTS"
+		addtoldif ""
+		addtoldif "dn: cn=PCNAME,ou=WKSTN,ou=SITE,ou=REGION,o=COURTS"
+		addtoldif "changetype: modify"
+		addtoldif "add: equivalentToMe"
+		addtoldif "equivalentToMe: cn=W-ALL-DESKTOPS-JUDICIAL,ou=PROD-GROUPS,ou=ORTCOMMON,ou=ORT,ou=CENTRAL,o=COURTS"
+		ReplaceTextinLDIF "PCNAME",strComputerCaselessInput.value,strLDIFLogLocation & strComputerCaselessInput.value & "groups.ldif" 'replace the additional new pcname variables to the actual pcname
+		ReplaceTextinLDIF "SITE",strMysite,strLDIFLogLocation & strComputerCaselessInput.value & "groups.ldif" ' populate sitename
+ 		ReplaceTextinLDIF "REGION",strMyregion,strLDIFLogLocation & strComputerCaselessInput.value & "groups.ldif" ' populate region name
+	End If
+	If workstationtype(3).Checked Then
+		SubRenewLDIFfile ' set the ldif back to the standard first 15 lines i.e NOT site specific
+        addtolog "Judicial Laptop is selected", strComputerCaselessInput.value
+        addtoldif "# Judicial Laptop"
+		addtoldif ""
+        addtoldif "dn: cn=W-ALL-LAPTOPS-JUDICIAL,ou=PROD-GROUPS,ou=ORTCOMMON,ou=ORT,ou=CENTRAL,o=COURTS"
+        addtoldif "changetype: modify"
+        addtoldif "add: Member"
+        addtoldif "member: cn=PCNAME,ou=WKSTN,ou=SITE,ou=REGION,o=COURTS"
+        addtoldif ""
+        addtoldif "dn: cn=W-ALL-LAPTOPS-JUDICIAL,ou=PROD-GROUPS,ou=ORTCOMMON,ou=ORT,ou=CENTRAL,o=COURTS"
+		addtoldif "changetype: modify"
+		addtoldif "add: equivalentToMe"
+		addtoldif "equivalentToMe: cn=PCNAME,ou=WKSTN,ou=SITE,ou=REGION,o=COURTS"
+		addtoldif ""
+		addtoldif "dn: cn=PCNAME,ou=WKSTN,ou=SITE,ou=REGION,o=COURTS"
+		addtoldif "changetype: modify"
+		addtoldif "add: groupMembership"
+		addtoldif "groupMembership: cn=W-ALL-LAPTOPS-JUDICIAL,ou=PROD-GROUPS,ou=ORTCOMMON,ou=ORT,ou=CENTRAL,o=COURTS"
+		addtoldif ""
+		addtoldif "dn: cn=PCNAME,ou=WKSTN,ou=SITE,ou=REGION,o=COURTS"
+		addtoldif "changetype: modify"
+		addtoldif "add: equivalentToMe"
+		addtoldif "equivalentToMe: cn=W-ALL-LAPTOPS-JUDICIAL,ou=PROD-GROUPS,ou=ORTCOMMON,ou=ORT,ou=CENTRAL,o=COURTS"
+		ReplaceTextinLDIF "PCNAME",strComputerCaselessInput.value,strLDIFLogLocation & strComputerCaselessInput.value & "groups.ldif" 'replace the additional new pcname variables to the actual pcname
+		ReplaceTextinLDIF "SITE",strMysite,strLDIFLogLocation & strComputerCaselessInput.value & "groups.ldif" ' populate sitename
+ 		ReplaceTextinLDIF "REGION",strMyregion,strLDIFLogLocation & strComputerCaselessInput.value & "groups.ldif" ' populate region name
+	End If
+	If workstationtype(4).Checked Then
+		SubRenewLDIFfile ' set the ldif back to the standard first 15 lines i.e NOT site specific
+        addtolog "Charles Ferguson SOE is selected", strComputerCaselessInput.value
+        addtoldif "# Charles Ferguson SOE"
+		addtoldif ""
+        addtoldif "dn: cn=W-ALL-CF-BASE-APPLICATIONS,ou=PROD-GROUPS,ou=ORTCOMMON,ou=ORT,ou=CENTRAL,o=COURTS"
+        addtoldif "changetype: modify"
+        addtoldif "add: Member"
+        addtoldif "member: cn=PCNAME,ou=WKSTN,ou=SITE,ou=REGION,o=COURTS"
+        addtoldif ""
+        addtoldif "dn: cn=W-ALL-CF-BASE-APPLICATIONS,ou=PROD-GROUPS,ou=ORTCOMMON,ou=ORT,ou=CENTRAL,o=COURTS"
+		addtoldif "changetype: modify"
+		addtoldif "add: equivalentToMe"
+		addtoldif "equivalentToMe: cn=PCNAME,ou=WKSTN,ou=SITE,ou=REGION,o=COURTS"
+		addtoldif ""
+		addtoldif "dn: cn=PCNAME,ou=WKSTN,ou=SITE,ou=REGION,o=COURTS"
+		addtoldif "changetype: modify"
+		addtoldif "add: groupMembership"
+		addtoldif "groupMembership: cn=W-ALL-CF-BASE-APPLICATIONS,ou=PROD-GROUPS,ou=ORTCOMMON,ou=ORT,ou=CENTRAL,o=COURTS"
+		addtoldif ""
+		addtoldif "dn: cn=PCNAME,ou=WKSTN,ou=SITE,ou=REGION,o=COURTS"
+		addtoldif "changetype: modify"
+		addtoldif "add: equivalentToMe"
+		addtoldif "equivalentToMe: cn=W-ALL-CF-BASE-APPLICATIONS,ou=PROD-GROUPS,ou=ORTCOMMON,ou=ORT,ou=CENTRAL,o=COURTS"
+		addtoldif ""
+        addtoldif "dn: cn=W-ALL-CF-WORKSTATIONS,ou=PROD-GROUPS,ou=ORTCOMMON,ou=ORT,ou=CENTRAL,o=COURTS"
+        addtoldif "changetype: modify"
+        addtoldif "add: Member"
+        addtoldif "member: cn=PCNAME,ou=WKSTN,ou=SITE,ou=REGION,o=COURTS"
+        addtoldif ""
+        addtoldif "dn: cn=W-ALL-CF-WORKSTATIONS,ou=PROD-GROUPS,ou=ORTCOMMON,ou=ORT,ou=CENTRAL,o=COURTS"
+		addtoldif "changetype: modify"
+		addtoldif "add: equivalentToMe"
+		addtoldif "equivalentToMe: cn=PCNAME,ou=WKSTN,ou=SITE,ou=REGION,o=COURTS"
+		addtoldif ""
+		addtoldif "dn: cn=PCNAME,ou=WKSTN,ou=SITE,ou=REGION,o=COURTS"
+		addtoldif "changetype: modify"
+		addtoldif "add: groupMembership"
+		addtoldif "groupMembership: cn=W-ALL-CF-WORKSTATIONS,ou=PROD-GROUPS,ou=ORTCOMMON,ou=ORT,ou=CENTRAL,o=COURTS"
+		addtoldif ""
+		addtoldif "dn: cn=PCNAME,ou=WKSTN,ou=SITE,ou=REGION,o=COURTS"
+		addtoldif "changetype: modify"
+		addtoldif "add: equivalentToMe"
+		addtoldif "equivalentToMe: cn=W-ALL-CF-WORKSTATIONS,ou=PROD-GROUPS,ou=ORTCOMMON,ou=ORT,ou=CENTRAL,o=COURTS"
+		ReplaceTextinLDIF "PCNAME",strComputerCaselessInput.value,strLDIFLogLocation & strComputerCaselessInput.value & "groups.ldif" 'replace the additional new pcname variables to the actual pcname
+		ReplaceTextinLDIF "SITE",strMysite,strLDIFLogLocation & strComputerCaselessInput.value & "groups.ldif" ' populate sitename
+ 		ReplaceTextinLDIF "REGION",strMyregion,strLDIFLogLocation & strComputerCaselessInput.value & "groups.ldif" ' populate region name
+	End If
+End Sub
+
+Sub SubRenewLDIFfile ' removes all but standard LDIF text
+addtolog "SubRenewLDIFfile subroutine entered", strComputerCaselessInput.value
+Dim i,strnewcontents
+Set objFSO = CreateObject("Scripting.FileSystemObject")
+Set objFile = objFSO.OpenTextFile(strLDIFLocation & strComputerCaselessInput.value & "groups.ldif", ForReading)
+For i = 1 To 1
+	strline=objFile.readline
+    strnewcontents=strnewcontents + strline + VbCrLf
+    'WScript.Echo strline
+Next
+objFile.Close
+Set objFile = objFSo.CreateTextFile(strLDIFLocation & strComputerCaselessInput.value & "groups.ldif",True)
+objFile.WriteLine strnewcontents
+objFile.Close
+End Sub
+
+Sub getmac5x ' executes wmi queries on non SOE (xpsp1 only) machines
+	addtolog "Entering getmac5x sub",strComputerCaselessInput.value
+	On Error Resume Next ' DO NOT REMOVE THIS LINE!!!!!!
+	' Err.Clear
+	EvtViewLDIFfile.disabled=true
+  	Set objSWbemLocator5x = CreateObject("WbemScripting.SWbemLocator") 
+  	Set objWMIService5x = objSWbemLocator5x.ConnectServer(strComputerCaselessInput.value, _ 
+    "root\CIMV2", _ 
+    strWMIuser5x, _ 
+    strWMIpassword5x)
+    Select Case Err
+    Case 0
+       Set colItems = objWMIService5x.ExecQuery("Select * from Win32_NetworkAdapter where NetConnectionID='"&_ 
+        strlan &_ 
+        "'",,48)
+          For Each objItem in colItems
+            InputstrMacAddress.value=objItem.MACAddress
+   			'Wscript.Echo "XPSP1 MAC Address: macaddress from WMI query: " & macaddressfromwmi
+            addtolog "XPSP1 MAC Address from WMI query: " & InputstrMacAddress.value,strComputerCaselessInput.value
+          Next
+    Case -2147024891
+       	addtolog "The username or password used to connect to the WMI service on the XPSP1 machine is incorrect",strComputerCaselessInput.value
+       	InputstrMacAddress.value="00:00:00:00:00:00"
+		addtolog  "Using default MAC address "& InputstrMacAddress.value,strComputerCaselessInput.value
+    Case -2147023174
+    	InputstrMacAddress.value="00:00:00:00:00:00"
+    	addtolog   "The XPSP1 computer is not online or you may have an invalid PCNAME",strComputerCaselessInput.value
+      	addtolog  "Using default MAC address "& InputstrMacAddress.value,strComputerCaselessInput.value
+    End Select
+    're-enable buttons
+    EvtCreateWSO.disabled=False
+    viewicelog.disabled=False
+	EvtViewLogfile.disabled=False
+	EvtViewLDIFfile.disabled=False
+	document.body.style.cursor = "default"
+End Sub
+
+'onclick Create Workstation Object
+Sub subcreatewso
+	strLDIFLogLocation="c:\ndps\iceomatic\"
+	strLDIFLocation="c:\ndps\iceomatic\"
+	'alert strComputerCaselessInput.value
+	'DataAreaPCSelection.InnerHTML = "You have selected " & strComputerCaselessInput.value
+	'change dummy reference to real computer name in the logfile
+	Set objFSO = CreateObject("Scripting.FileSystemObject")
+	Set objFile = objFSO.OpenTextFile(strLDIFLogLocation & strComputerCaselessInput.value & ".log", ForReading)
+	Do Until objFile.AtEndOfStream ' do untill end of file
+	    strLine = objFile.ReadLine
+	    If InStr(strLine,"dummy") Then
+	    	'If strLine = "dummy" Then
+	        'strLine = "Log of workstation object creation for " &  strComputerCaselessInput.value & " on 13/06/2007 10:49:36 a.m."
+	    	strLine=Replace(strLine,"dummy",strComputerCaselessInput.value)
+	    End If
+	    strContents = strContents & strLine & vbCrLf ' thisis the line that makes that rebuilds the file one line at a time plus carriage retun linefeed to put items on a seperate line.
+	Loop
+	objFile.Close
+	Set objFile = objFSO.OpenTextFile(strLDIFLogLocation & strComputerCaselessInput.value & ".log", ForWriting) ' open this file for writing
+	objFile.Write(strContents) ' write file
+	objFile.Close
+
+'We need to know where to find ice.exe
+	' Set objFSO1 = CreateObject("Scripting.FileSystemObject")
+' 	Set objLogFile = objFSO1.OpenTextFile(strLDIFLogLocation & "location.txt",1)
+' 		strIcePathAndExe=objLogFile.readline
+' 		objLogFile.close
+' 	addtolog strLDIFLogLocation & "location.txt" & " advise that Ice.exe is located at " & strIcePathAndExe, strComputerCaselessInput.value
+
+	strYourPassword.focus ' guide user to the password box
+'the following if-then ensures that the pointer file is always referenced for the username to use, the pointer file is updated every time an onchnage event occurs for the username textbox
+	If objFSOIceLog.FileExists(strSavedUserNamePointerFileLocation & strSavedUserNamePointerFileName) = False Then 'file does not exist
+		stryournameCNonly4Ice=stryournameCNonly
+		addtolog "The user name I have from stryournameCNonly is " & stryournameCNonly,strComputerCaselessInput.value
+	Else ' file does exist
+		subReProcessUserNameandcontext
+		'subReadLineIntextfile strSavedUserNamePointerFileLocation,strSavedUserNamePointerFileName,strTheValueiWantBack
+		'MyArray = Split(ucase(strTheValueiWantBack),".") ' take the readline and split it on periods ("."), first value is the CN for the user
+		'stryournameCNonly4Ice=MyArray(0)
+		'strUsersSite=MyArray(1)
+		'strUsersRegion=MyArray(2)
+		'addtolog "The user name I have from the pointer file is stryournameCNonly4Ice " & stryournameCNonly4Ice, strComputerCaselessInput.value
+		'addtolog "PointerFile:MyArray stryournameCNonly element 0 is " & MyArray(0),strComputerCaselessInput.value
+		'addtolog "PointerFile:MyArray strUsersSite element 1 (Mysite) " & MyArray(1), strComputerCaselessInput.value
+		'addtolog "PointerFile:MyArray strUsersRegion element 2 (MyRgion) " & MyArray(2), strComputerCaselessInput.value
+	end If
+
+	'This is where ice runs and does its ldap stuff
+	Set objShell = CreateObject("WScript.Shell")
+	'Set objshellexec=objShell.exec(strIceExeLocation & "ice.exe -S LDIF -f " & strLDIFLocation & strComputer & ".ldif -D LDAP -s 10.1.1.33 -p 389 -d ""CN=mounsei,ou=wgtn,ou=central,o=Courts"" -w "&  strpassword )'> " &  strIceExeLocation & "runice.log")'runs witouht cmd.exe
+	addtolog "The username I've been asked to login to eDirectory with is " & stryournameCNonly4Ice,strComputerCaselessInput.value
+	addtolog "The region ice will use is " & strUsersRegion & " .The site ice will use is " & strUserssite,strComputerCaselessInput.value
+	'addtolog "The password ice will use is " & strYourPassword.value, strComputerCaselessInput.value 'for debugging only, DO NOT enable this line
+	'strIcePathAndExe.value=strIcePathAndExe
+	
+	' LDIF switches : "-o", overwrites log ;"-l %path%", creates logfile at location %path% 
+	Set objshellexec=objShell.exec(strIcePathAndExe & " -o -l " & strLDIFLogLocation & "ice.Log " &  "-S LDIF -f " & strLDIFLocation & strComputerCaselessInput.value & ".ldif -D LDAP -s 10.1.1.33 -p 389 -d CN=" & stryournameCNonly4Ice & ",ou=" & strUsersSite & ",ou=" & strUsersRegion & ",o=Courts -w " &  strYourPassword.value)' & " " &  " >> " & " " &  strIcePathAndExe & "runice.log")
+	Set objStdOut = objshellexec.StdOut
+	While Not objStdOut.AtEndOfStream ' read all ines untill eof
+		'we interrogate stdout of ice.exe for errors codes
+	  	strLine = objStdOut.ReadLine ' read each line
+		'WScript.Echo "readline" & strLine
+	   If InStr(strLine,"failed:") And InStr(strLine,"dn:")Then ' look for both "failed" and "dn:"
+	       StrProcesedLine=strLine
+	       'wscript.echo "stdprocessline" &  StrProcesedLine
+			MyArray=Split(StrProcesedLine,":")
+			strIceError=Mid(myarray(1),2,2)
+			'wscript.echo "mymid" & strIceError
+			blnIceSuccess=True ' if there is ever an error then blnsuccess will be set to false
+			Select Case strIceError ' output depending on 2 digit code in error line
+	       	Case "32"
+	        	addtolog "Your username may be invalid or the context may be incorrect -  your workstation object will not be created",strComputerCaselessInput.value
+	        	blnIceSuccess=False
+				alert "Your username may be invalid or the context may be incorrect -  your workstation object will not be created"
+			Case "49"
+				addtolog "Your password has not been recognised - your workstation object will not be created",strComputerCaselessInput.value
+				blnIceSuccess=False
+				alert "Your password has not been recognised - your workstation object will not be created"
+			Case "LB" ' quirk of the text returned..actually a 68 error
+				addtolog "This workstation object already exists in the Tree",strComputerCaselessInput.value
+				alert "This workstation object already exists in the Tree"
+				blnIceSuccess=False
+			Case "53"'53 occured when my edir account was locked!
+				addtolog "There is something wrong with your account. It may be locked.",strComputerCaselessInput.value
+				alert "There is something wrong with your account. It may be locked"
+			Case Else
+				blnIceSuccess=False ' there may be an error condition I haven't catered for 
+	        	addtolog "An error has occured that this error checking does no cater for - your workstation object will not be created. Check ice.log for more details",strcomputer
+	        	alert  "An error has occured, though buggered if i know what it is " 
+			End Select
+	   Else
+	   End If
+	   addtolog "End of create workstation object logic", strComputerCaselessInput.value
+	  Wend
+	    If blnIceSuccess=True Then 
+	           addtolog "Your workstation should appear in ConsoleOne in a minute or two",strcomputer
+	    End If
+
+' now run ice to create the custom group memberships..first we add a 40 second delay to ensure that the group memberships get added (the ldap server seems to get busy and drops things off)
+strdelay=30
+strresume = Second(now()) + strDelay
+Do Until Second(Now()) > strResume
+Loop
+
+addtolog "About to add group memberships",strComputerCaselessInput.value
+   	Set objshellexec=objShell.exec(strIcePathAndExe & " -o -l " & strLDIFLogLocation & "icegroup.Log " &  "-S LDIF -f " & strLDIFLocation & strComputerCaselessInput.value & "groups.ldif -D LDAP -s 10.1.1.33 -p 389 -d CN=" & stryournameCNonly4Ice & ",ou=" & strUsersSite & ",ou=" & strUsersRegion & ",o=Courts -w " &  strYourPassword.value)' & " " &  " >> " & " " &  strIcePathAndExe & "runice.log")
+	Set objStdOut = objshellexec.StdOut
+While Not objStdOut.AtEndOfStream ' read all ines untill eof
+		'we interrogate stdout of ice.exe for errors codes
+	  	strLine = objStdOut.ReadLine ' read each line
+		'WScript.Echo "readline" & strLine
+	   If InStr(strLine,"failed:") And InStr(strLine,"dn:")Then ' look for both "failed" and "dn:"
+	   addtolog "there is an issue with adding the group memberships...check out icegroup.Log",strComputerCaselessInput.value
+	   Else
+	   End If
+	   Wend
+	   
+	   	addtolog "**********************",strComputerCaselessInput.value ' this to delineate creation attempts in the log file
+		addtolog "******END OF LOG******",strComputerCaselessInput.value
+		addtolog "**********************",strComputerCaselessInput.value
+
+
+End Sub
+
+'view the log file that ice.exe creates
+sub subviewicelog
+	strLDIFLogLocation="c:\ndps\iceomatic\"
+	Set objFSO1 = CreateObject("Scripting.FileSystemObject")
+	Set objLogFile = objFSO1.OpenTextFile(strLDIFLogLocation & "location.txt",1)
+	strIcePathAndExe=objLogFile.readline
+	objLogFile.close
+	' we need to get the path only  from the strpathandexe string
+	stricepathonly=Left(strIcePathAndExe,((Len(strIcePathAndExe)) - 4))
+	'WScript.Echo "stricepatonly " & stricepatonly
+	Set objShell = CreateObject("WScript.Shell")
+	' I was getting the path from stricepathonly, though I now find it doesn't work, so am sourcing the log from strLDIFLocation
+  	Set objWshScriptExec = objShell.Exec("C:\winnt\notepad.exe " & strLDIFLocation & "ice.log")
+  	addtolog "The Ice log was viewed from " & strLDIFLocation ,strComputerCaselessInput.value
+End sub
+
+	'don't believe this is required anynmore
+	'Sub subEnterYourUserName ' gets novell username from variable and pass to msgbox as a Default
+	'strFullyDistinguishedName = window.prompt("Please enter the user name ", strOutputJustTheUsersNameMinusrubbish & "." & strContextUser)
+	' ("The users name is " & strOutputJustTheUsersNameMinusrubbish )
+	'DataAreaUserName.InnerHTML="The users name is " & strFullyDistinguishedName + DataAreaUserName.InnerHTML
+	'End Sub
+	
+'open LDIF file
+Sub SubPrintLDIF_onclick
+	strLDIFLocation="c:\ndps\iceomatic\"
+    addtolog "The view LDIF button was clicked", strComputerCaselessInput.value
+    Set objShell = CreateObject("WScript.Shell")
+	Set objWshScriptExec = objShell.Exec("C:\winnt\notepad.exe " & strLDIFLocation & strComputerCaselessInput.value & ".ldif")  
+End Sub
+
+Sub SubViewGroupLDIF
+	strLDIFLocation="c:\ndps\iceomatic\"
+    addtolog "The view LDIF button was clicked", strComputerCaselessInput.value
+    Set objShell = CreateObject("WScript.Shell")
+	Set objWshScriptExec = objShell.Exec("C:\winnt\notepad.exe " & strLDIFLocation & strComputerCaselessInput.value & "groups.ldif")  
+End Sub
+
+'open Log
+Sub	SubPrintLogFile_onclick
+	strLDIFLocation="c:\ndps\iceomatic\"
+	set objShell= CreateObject("Shell.Application")
+    Set objFSO = CreateObject("Scripting.FileSystemObject")
+    addtolog "The ViewIceLog checkbox button was clicked", strComputerCaselessInput.value
+	Set objFolder = objShell.Namespace("C:\ndps\iceomatic")
+	Set objFolderItem = objFolder.ParseName(strComputerCaselessInput.value & ".log")
+	objFolderItem.InvokeVerbEx("open")
+End Sub
+
+Sub subrenamefile (oldname,newname)
+	'viewvariables " subsubrenamefile ", oldname & " AND " & newname
+	Dim objfso
+	Set objFSO = CreateObject("Scripting.FileSystemObject")
+	objfso.MoveFile oldname , newname
+	addtolog "The file named " & oldname & " has been renamed " & newname,strComputerCaselessInput.value
+End Sub
+
+'Browse for the ice.exe file
+Sub BrowseForIce_onclick()
+	'-- show browse window and Get file path:
+	'Dim strIcePathAndExe,strcomputer,objlog2,objLogFile,strLDIFLogLocation
+	strLDIFLogLocation = "c:\ndps\iceomatic\"
+	strIcePathAndExe = Browse
+	If (strIcePathAndExe <> "") Then
+	'--Do something with file....
+	'MsgBox strIcePathAndExe '--For demo
+	'strIcePathAndExe
+	'addtolog "User browsed for location of ice.exe - " & strIcePathAndExe,"dummy"
+	Set objlog2 = CreateObject("Scripting.FileSystemObject")
+	Set objLogFile = objlog2.CreateTextFile(strLDIFLogLocation & "location.txt",false)
+	objLogFile.WriteLine strIcePathAndExe
+	objLogFile.close
+	browseforice.disabled=true
+	End If
+End Sub
+
+Function Browse()
+	'Dim Q2, sRet, IE
+	'On Error Resume Next
+	Q2 = chr(34)
+	Set IE = CreateObject("InternetExplorer.Application")
+	IE.visible = False
+	IE.Navigate("about:blank")
+	Do Until IE.ReadyState = 4
+	Loop
+	IE.Document.Write "<HTML><BODY><INPUT ID=" & _
+	Q2 & "Fil" & Q2 & "Type=" & Q2 & "file" & Q2 & _
+	"></BODY></HTML>"
+	With IE.Document.all.Fil
+	.focus
+	.click
+	Browse = .value
+	End With
+	IE.Quit
+	Set IE = Nothing
+End Function
+
+Sub subsplitWSOcontext
+	MyArray = Split(ucase(wsocontext.value),".") ' wkstn 0 site 1 region 2 
+	strMysite=MyArray(1)
+	strMyregion=MyArray(2)
+	addtolog "MyArray wscontext element 0 is " & MyArray(0)& " via subsplitWSOcontext",strComputerCaselessInput.value
+	addtolog "MyArray wscontext element 1 (Mysite) " & MyArray(1) & " via subsplitWSOcontext", strComputerCaselessInput.value
+	addtolog "MyArray wscontext element 2 (MyRgion) " & MyArray(2) & " via subsplitWSOcontext", strComputerCaselessInput.value
+End Sub
+	
+Sub ReplaceTextinLDIF (OldText,NewText,LdifFileName) ' generic sub for replacing text in the ldif file
+	strLDIFLocation="c:\ndps\iceomatic\"
+	Set objFile = CreateObject("Scripting.FileSystemObject")
+	Set objLDIFFile = objFile.OpenTextFile(LdifFileName,1)
+	'WScript.Echo strLDIFLocation & strComputer & ".ldif"
+	strText = objLDIFFile.ReadAll ' read in ldif file
+	objLDIFFile.Close
+	strNewText = Replace(strText, OldText, Newtext)'
+	Set objLDIFFile = objFile.OpenTextFile(LdifFileName,ForWriting,true)' write the new _ 
+	'ldif file
+	objLDIFFile.WriteLine strnewtext
+	objLDIFFile.Close
+	addtolog "Replaced "& OldText & " with " & NewText, strComputerCaselessInput.value
+End Sub
+
+'generic sub for adding text to a logfile
+Sub addtolog (youraddition,logfilename)
+	strLDIFLogLocation = "c:\ndps\iceomatic\"
+	Set objFSOIceLog2 = CreateObject("Scripting.FileSystemObject")
+	Set objFileLog = objFSOIceLog2.OpenTextFile(strLDIFLogLocation & logfilename & ".Log",ForAppending)
+	objFileLog.WriteLine youraddition
+	objFileLog.close
+End Sub
+
+Sub addtoldif (youraddition)
+	strLDIFLogLocation = "c:\ndps\iceomatic\"
+	Set objFSOIceLog2 = CreateObject("Scripting.FileSystemObject")
+	Set objFileLog = objFSOIceLog2.OpenTextFile(strLDIFLocation & strComputerCaselessInput.value & "groups.ldif",ForAppending)
+	objFileLog.WriteLine youraddition
+	objFileLog.close
+End Sub
+
+'generic sub for reading a line in a text file
+' subReadLineIntextfile strReadLineInTextFileLocation,strReadLineInTextFileFileName,strTheLineIntextfile
+Sub subReadLineIntextfile (strReadLineInTextFileLocation,strReadLineInTextFileFileName,strTheLineIntextfile)
+Dim objTextFile,ReadLineIntextfile
+Set objTextFile = objFSO1.OpenTextFile(strReadLineInTextFileLocation & strReadLineInTextFileFileName,1)
+			strTheLineIntextfile=objTextFile.readline
+			objTextFile.close
+End Sub
+'incase the user chnages the wso context after the ldif is modified, this sub makes this change "onchange" wsocontext input
+Sub subUpdateWSOcontextInLDIF
+Dim strMyNewsite,strMyNewregion
+	MyArray = Split(ucase(wsocontext.value),".")
+	strMyNewsite=MyArray(1)
+	strMyNewregion=MyArray(2)
+	addtolog "MyArray wscontext element 0 is " & MyArray(0),strComputerCaselessInput.value
+	addtolog "MyArray wscontext element 1 (MyNewsite) " & MyArray(1) & " replacing " & strMysite, strComputerCaselessInput.value
+	addtolog "MyArray wscontext element 2 (MyNewRegion) " & MyArray(2)& " replacing " & strMyregion, strComputerCaselessInput.value
+	ReplaceTextinLDIF strMysite, strMyNewsite,strLDIFLogLocation & strComputerCaselessInput.value & ".ldif"' change preliminary sitename to new sitename
+	ReplaceTextinLDIF strMyregion, strMyNewregion,strLDIFLogLocation & strComputerCaselessInput.value & ".ldif"' chnage preliminary region name to new region name
+	ReplaceTextinLDIF strMysite, strMyNewsite,strLDIFLogLocation & strComputerCaselessInput.value & "groups.ldif"' change preliminary sitename to new sitename
+	ReplaceTextinLDIF strMyregion, strMyNewregion,strLDIFLogLocation & strComputerCaselessInput.value & "groups.ldif"' chnage preliminary region name to new region name
+
+End Sub
+
+Sub subReProcessUserNameandcontext
+		subcreatetextfile strSavedUserNamePointerFileLocation,strSavedUserNamePointerFileName,strEnterUsersName.value
+		subReadLineIntextfile strSavedUserNamePointerFileLocation,strSavedUserNamePointerFileName,strTheValueiWantBack
+		MyArray = Split(ucase(strTheValueiWantBack),".") ' take the readline and split it on periods ("."), first value is the CN for the user
+		stryournameCNonly4Ice=MyArray(0)
+		strUsersSite=MyArray(1)
+		strUsersRegion=MyArray(2)
+		addtolog "The user name I have from the pointer file is stryournameCNonly4Ice " & stryournameCNonly4Ice, strComputerCaselessInput.value
+		addtolog "PointerFile:MyArray stryournameCNonly element 0 is " & MyArray(0),strComputerCaselessInput.value
+		addtolog "PointerFile:MyArray strUsersSite element 1 (Mysite) " & MyArray(1), strComputerCaselessInput.value
+		addtolog "PointerFile:MyArray strUsersRegion element 2 (MyRgion) " & MyArray(2), strComputerCaselessInput.value
+End Sub
+
+' add reg key and value...this is so that you don't get an error about the script being non-responsive
+Sub SubAddStylesDword
+	Set oreg=GetObject("winmgmts:{impersonationLevel=impersonate}!\\" & _ 
+    strcomputerlocal & "\root\default:StdRegProv")
+	strKeyPath = "SOFTWARE\Microsoft\Internet Explorer\Styles"
+	strValueName = "MaxScriptStatements"
+	dwValue = 80000000
+	oReg.CreateKey HKEY_CURRENT_USER,strKeyPath
+	oReg.SetDWORDValue HKEY_CURRENT_USER,strKeyPath,strValueName,dwValue
+	addtolog "MaxScriptStatements reg key added","dummy" ' should really do some sort of checking that this is sucessful
+End Sub
+
+'remove maxscripts reg entry as documented above
+	Sub SubDeleteStylesDword
+	Set oReg=GetObject("winmgmts:{impersonationLevel=impersonate}!\\" & _ 
+	    strcomputerlocal & "\root\default:StdRegProv")
+	strKeyPath = "SOFTWARE\Microsoft\Internet Explorer\Styles"
+	strDWORDValueName = "MaxScriptStatements"
+	oReg.DeleteValue HKEY_CURRENT_USER,strKeyPath,strDWORDValueName
+	End Sub
+
+'error checking Sub
+Sub DisplayErrorInfo
+    alert "Error:      : " & Err
+    alert  "Error (hex) : &H" & Hex(Err)
+    alert  "Source      : " & Err.Source
+    alert  "Description : " & Err.Description
+    Err.Clear
+End Sub
+
+'local passwords are now encoded
+'**Start Encode**#@~^SgAAAA==@#@&/OMtqwm/kAWMNjrA'Ej}2,O{Hm/Y.E@#@&/DD	H(2m/dhK.Nl6xEkx!Ad0FE@#@&@#@&9xQAAA==^#~@</script>
+
+alert("version    = " + oHTA.version);
+
+<body>
+<br>
+<table WIDTH="580" height="600" BORDER=1>
+<!---------------->
+<!-- 1st row -->
+<!---------------->
+<tr>
+      <td ALIGN="center" WIDTH=570 height="30" COLSPAN=2>
+         <table BORDER=0>
+         
+			<font style="font-size:17pt;color:darkred;"> <center>eDirectory Workstation Object Creation Tool</center></font>
+         
+         </table>
+      </td>
+</tr>
+<!---------------->
+<!-- 2nd row -->
+<!---------------->
+<tr>
+      <td VALIGN=TOP WIDTH="560" height="330" COLSPAN=2>
+         <table BORDER=0>
+            
+ <br>
+<font style="font-size:8pt;">Enter your PC/LT/HS/MOJ name (remove the ".") </font><br>
+<input type="text" tabIndex=1 class="textboxmedium" value="" size="14" name="strComputerCaselessInput" onchange="SubDetectMacAddress" ><br><br>
+<font style="font-size:8pt;">Click inside the box below, wait a moment or two and if a valid MAC address isn't auto-populated you'll have to enter it manually</font><br>
+<input type="text" tabIndex=2 value="" size="15" name="InputstrMacAddress" onchange="ReplaceTextinLDIF strDefMacAddress,InputstrMacAddress.value,strLDIFLogLocation & strComputerCaselessInput.value & strLDIFextension"><br><br>
+<font style="font-size:8pt;">Enter the target context for the new workstation object</font><br>
+<input type="text" tabIndex=3 value="" size="55" name="WSOcontext" onchange="subupdatewsocontextinldif"><br><br>
+<input type="radio" tabIndex=4 name="workstationtype"  checked=true onclick="SubUpdateworkstationType"><font style="font-size:8pt;">Standard Desktop</font>
+<input type="radio" name="workstationtype"  onclick="SubUpdateworkstationType"><font style="font-size:8pt;">Standard Laptop</font>
+<input type="radio" name="workstationtype"  onclick="SubUpdateworkstationType"><font style="font-size:8pt;">Judicial Desktop</font>
+<input type="radio" name="workstationtype"  onclick="SubUpdateworkstationType"><font style="font-size:8pt;">Judicial Laptop</font>
+<input type="radio" name="workstationtype"  onclick="SubUpdateworkstationType"><font style="font-size:8pt;">Charles Ferguson</font><br><br>
+<font style="font-size:8pt;">Enter the username under which you want to create the workstation object</font><br>
+<input type="text" tabIndex=5 value="" size="55" name="strEnterUsersName" onchange="subReProcessUserNameandcontext"><br><br>
+<font style="font-size:8pt;">Enter your password</font><br>
+<input type="password" tabIndex=6 name="strYourPassword" size="14"><br>
+   </table>
+      </td>
+  </tr>
+<!---------------->
+<!-- 3rd row -->
+<!---------------->
+<tr>
+      <td VALIGN=TOP WIDTH="560" height="30" COLSPAN=2>
+         <table BORDER=0>
+            <tr>
+<td align=center width=220><INPUT class="buttonsmall" NAME="BrowseForIce" TYPE="button" TITLE="Click here to browse the filesytem for ice.exe (It's usually in ..\1.2\bin under your ConsoleOne directory)" VALUE="Browse for Ice.exe"></INPUT></td>
+<td align=center width=360><input id=inputid2 type="button" tabIndex=7 value="Create Workstation Object" size="30" name="EvtCreateWSO" title="Click here to start the create workstation object process" disabled=true onclick="subcreatewso"><td>
+</tr>
+         </table>
+      </td>
+  </tr>
+<!---------------->
+<!-- 4th row -->
+<!---------------->
+<tr>
+      <td VALIGN=TOP WIDTH="560" COLSPAN=2>
+         <table BORDER=0>
+           
+<span id = "Introduction"><font style="font-size:8pt;">The MAC address should auto-populate for existing SOE machines and Ministry build XPSP1 machines with a known local admin password.For this to happen the target machine must be up and running.</font></span><br>
+<font style="font-size:8pt;"><span id = "HowTo1"><font style="font-size:8pt;color:maroon;">Step One:</font> Enter a valid pcname</font></span><br>
+<font style="font-size:8pt;"><span id = "HowTo2"><font style="font-size:8pt;color:maroon;">Step Two:</font> Click inside the MAC address box, wait a few moments (nothing will appear to happen at first!),and if a valid MAC address isn't auto-populated then enter the correct MAC address manually. Don't remove the colons</Introduction></span><br>
+<font style="font-size:8pt;"><span id = "HowTo3"><font style="font-size:8pt;color:maroon;">Step Three:</font> Modify the workstation object context and your choosen user context as necessary</font></span><br>
+<font style="font-size:8pt;"><span id = "HowTo4"><font style="font-size:8pt;color:maroon;">Step Four:</font> Customise the workstation object by selecting either Non-Judicial Laptop or Desktop, Judicial Laptop or Desktop, or Charles Ferguson SOE</font></span><br>
+<font style="font-size:8pt;"><span id = "HowTo5"><font style="font-size:8pt;color:maroon;">Step Five:</font> Click on the "Create Workstation Object" button to start the creation process. Ice'O'matic may appear non-responsive for up to 30 seconds</font></span><br>
+<font style="font-size:8pt;"><span id = "HowTo6"><font style="font-size:8pt;color:maroon;">Step Six:</font> Check in ConsoleOne for your workstation object and its group memberships</font></span><br>
+</b>
+
+
+         </table>
+      </td>
+  </tr>
+<!---------------->
+<!-- 5th row -->
+<!---------------->
+<tr>
+      <td VALIGN=TOP WIDTH="560" height="30" >
+         <table BORDER=0>
+           
+<td valign=center align=center width=186><input class="buttonsmall" id=inputid  type="button" tabIndex=8 value="View WSO LDIF file" size="60" name="EvtViewLDIFfile" title="View the LDIF file that is used to create the workstation object" disabled=true onclick="SubPrintLDIF_onclick"></td>
+<td valign=center align=center width=186><input class="buttonsmall" id=inputid2  type="button" tabIndex=9 value="View Group LDIF file" size="30" name="EvtViewLDIFgroupfile" title="View the LDIF file that is used to add the custom workstation groups" disabled=true onclick="SubViewGroupLDIF"></td>
+<td valign=center align=center width=186><input class="buttonsmall" id=inputid1  type="button" tabIndex=10 value="View Log file" size="30" name="EvtViewLogfile" title="View Ice'O'matic's log" disabled=true onclick="SubPrintLogFile_onclick"></td>
+<td valign=center align=center width=186><input class="buttonsmall" id=viewwicelog  type="button" tabIndex=11 value="View ice.log" name="viewicelog"  title="This is the logfile that ice itself creates" onClick="subviewicelog"></td>
+ 
+         </table>
+      </td>
+  </tr>
+</table>
+</body>
+</html>
